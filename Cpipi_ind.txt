@@ -1,0 +1,89 @@
+#include <mpi.h>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <limits>
+#include <algorithm>
+
+using namespace std;
+
+// Функция для чтения чисел из файла и нахождения минимального значения
+double find_min_in_file(const string& filename) {
+    ifstream file(filename);
+    if (!file.is_open()) {
+        cerr << "Error: Could not open file " << filename << endl;
+        return numeric_limits<double>::max();
+    }
+
+    double min_val = numeric_limits<double>::max();
+    double num;
+    while (file >> num) {
+        if (num < min_val) {
+            min_val = num;
+        }
+    }
+    file.close();
+    return min_val;
+}
+
+int main(int argc, char** argv) {
+    MPI_Init(&argc, &argv);
+
+    int world_size, world_rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    if (argc < 3) {
+        if (world_rank == 0) {
+            cerr << "Usage: " << argv[0] << " output_file input_file1 input_file2 ..." << endl;
+        }
+        MPI_Finalize();
+        return 1;
+    }
+
+    const string output_file = argv[1];
+    int num_files = argc - 2;
+    char* input_files = argv[2];
+
+    // Распределяем файлы по процессам
+    int files_per_process = num_files / world_size;
+    int remainder = num_files % world_size;
+
+    int start_index, end_index;
+    if (world_rank < remainder) {
+        start_index = world_rank * (files_per_process + 1);
+        end_index = start_index + files_per_process + 1;
+    } else {
+        start_index = remainder * (files_per_process + 1) + (world_rank - remainder) * files_per_process;
+        end_index = start_index + files_per_process;
+    }
+
+    // Каждый процесс обрабатывает свои файлы и находит локальный минимум
+    double local_min = numeric_limits<double>::max();
+    for (int i = start_index; i < end_index && i < num_files; i++) {
+        string filename(argv[2 + i]);
+        double file_min = find_min_in_file(filename);
+        if (file_min < local_min) {
+            local_min = file_min;
+        }
+    }
+
+    // Собираем все локальные минимумы на процессе 0
+    double global_min;
+    MPI_Reduce(&local_min, &global_min, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+
+    // Процесс 0 записывает результат в выходной файл
+    if (world_rank == 0) {
+        ofstream out(output_file);
+        if (out.is_open()) {
+            out << global_min << endl;
+            out.close();
+            cout << "Global minimum: " << global_min << " written to " << output_file << endl;
+        } else {
+            cerr << "Error: Could not open output file " << output_file << endl;
+        }
+    }
+
+    MPI_Finalize();
+    return 0;
+}
